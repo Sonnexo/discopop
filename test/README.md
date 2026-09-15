@@ -16,3 +16,10 @@ The execution of the unit tests requires the `build` folder to be located within
 
 # Executing Unit Tests
 The end-to-end tests can be executed by simply using `python -m unittest -v`.
+
+# Work-in-progress Tests
+The tests below `test/wip_end_to_end` are known to fail and are excluded from collection
+(see `test/wip_end_to_end/__init__.py`), so neither `python -m unittest -v` nor `pytest`
+picks them up. To work on one of them, run it explicitly, e.g.
+`python -m unittest -v test.wip_end_to_end.do_all.backwards_array_access.test`.
+Once it passes, move it over to `test/end_to_end`.
