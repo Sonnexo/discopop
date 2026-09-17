@@ -96,3 +96,17 @@ You can execute a full example by following the steps below. The example should 
 
 ### Excecute CI Pipeline locally
 To execute the CI pipeline locally, use the following command from the root folder: `scripts/dev/run_ci_locally.sh`.
+
+## Benchmarks
+### Runtime library micro-benchmarks
+- Google Benchmark micro-benchmarks for the runtime library data structures live in `benchmark/`
+- they are built through the root `CMakeLists.txt`: `cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1`, then `cmake --build build_tests --target DiscoPoP_BM -j "$(nproc)"`, then run `build_tests/benchmark/DiscoPoP_BM`
+
+### Pass overhead benchmark
+- `benchmark/pass_overhead` compiles the test programs in `benchmark/pass_overhead/programs` twice -- once plain, once with the LLVM pass from `profiler/DiscoPoP` plus the linked runtime library -- and reports compile time, run time and binary size side by side
+- it needs the profiler installed without `-e`: `venv/bin/pip install ./profiler`
+- to run it: `venv/bin/python benchmark/pass_overhead/run_pass_benchmark.py`
+- `--filter <substring>` and `--repetitions <n>` shorten the run while iterating; `--json-out` / `--markdown-out` write machine readable results
+- it fails when a program does not build or run, or when the instrumented binary stops reproducing the baseline output; timings only fail the run if `--max-compile-factor` / `--max-run-factor` are given
+- adding a program means dropping a `.cpp` file with a `// BENCHMARK: <description>` comment into `benchmark/pass_overhead/programs`; see `benchmark/pass_overhead/README.md`
+- the CI job `pass_overhead_benchmark` in `.github/workflows/ci.yml` runs it and publishes the comparison as the job summary
