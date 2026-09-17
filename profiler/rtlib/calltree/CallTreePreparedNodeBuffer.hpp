@@ -12,7 +12,6 @@
 
 #pragma once
 
-#include <iostream>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -86,8 +85,7 @@ public:
       internal_queue.pop();
       return buffer;
     } else {
-      // allocate a new chunk
-      std::cout << "FETCH FAILED!" << std::endl;
+      // pool is empty, allocate a new chunk
       return new CallTreeNodeQueueChunk();
     }
   }
