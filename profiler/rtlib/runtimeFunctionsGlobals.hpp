@@ -66,7 +66,14 @@ extern ReportedBBSet *bbList;
 extern stringDepMap *outPutDeps;
 // end hybrid analysis
 
-extern std::unordered_map<char *, long> cuec;
+// The globals declared as references below outlive the static destructors of the target
+// program: __dp_finalize still uses them after those have run. They are constructed by
+// construct_immortal_globals() and destroyed at the end of __dp_finalize; before the runtime
+// has been initialized, the referenced objects do not exist yet. See Immortal.hpp.
+void construct_immortal_globals();
+void destroy_immortal_globals();
+
+extern std::unordered_map<char *, long> &cuec;
 
 extern bool dpInited;         // library initialization flag
 extern bool targetTerminated; // whether the target program has returned from main()
@@ -89,10 +96,10 @@ extern FirstAccessQueueChunk *mainThread_AccessInfoBuffer;
 #define FIRST_ACCESS_QUEUE_SIZES 100000
 #define SECOND_ACCESS_QUEUE_SIZES 1000
 
-extern FirstAccessQueue firstAccessQueue;
-extern SecondAccessQueue secondAccessQueue;
+extern FirstAccessQueue &firstAccessQueue;
+extern SecondAccessQueue &secondAccessQueue;
 extern pthread_t *secondAccessQueue_worker_thread;
-extern FirstAccessQueueChunkBuffer firstAccessQueueChunkBuffer;
+extern FirstAccessQueueChunkBuffer &firstAccessQueueChunkBuffer;
 
 extern AbstractShadow *singleThreadedExecutionSMem;
 
@@ -105,7 +112,7 @@ extern CallState *current_callpath_state;
 // the graph due to non-circular states) if a function is left, but the current counter in
 // calls_without_executed_transitions is not 0, decrease the counter instead of transitioning the state. disables the
 // transitioning
-extern std::vector<uint32_t> calls_without_executed_transitions;
+extern std::vector<uint32_t> &calls_without_executed_transitions;
 extern CallStateGraph *call_state_graph;
 
 // statistics

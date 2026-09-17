@@ -38,6 +38,9 @@ void generateStringDepMap();
 // conditionally taken basic blocks the registered dependencies belong to were
 // actually executed.
 void process_registered_bb_deps();
+// Releases the strings registered by __dp_add_bb_deps. Called from
+// destroy_immortal_globals(), once process_registered_bb_deps() has consumed them.
+void release_registered_bb_deps();
 
 void readRuntimeInfo();
 
