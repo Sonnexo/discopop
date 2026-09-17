@@ -203,10 +203,15 @@ void DiscoPoP::runOnBasicBlock(BasicBlock &BB) {
           IRBRet.CreateCall(DpFuncExit, {ConstantInt::get(Int32, getLID(&*BI, fileID)), ConstantInt::get(Int32, 0)});
           continue;
         }
-        if ((fn.str() == "exit") || F->doesNotReturn()) // using exit() to terminate program
+        if ((fn.str() == "exit") || F->doesNotReturn()) // terminates without returning to main
         {
-          // only insert DpFinalize right before the main program exits
-          insertDpFinalize(&*BI);
+          // exit() and quick_exit() run the handlers registered at program start, so the runtime is
+          // shut down through .fini_array like on the ordinary path. The others -- abort(), _exit(),
+          // a failed assertion -- bypass those, and the results collected so far would be lost
+          // without shutting the runtime down here.
+          if ((fn.str() != "exit") && (fn.str() != "quick_exit")) {
+            insertDpFinalize(&*BI);
+          }
           continue;
         }
         if ((fn.str() == "_Znam") || (fn.str() == "_Znwm") || (fn.str() == "malloc")) {
@@ -279,13 +284,11 @@ void DiscoPoP::runOnBasicBlock(BasicBlock &BB) {
       assert(parent != NULL);
       StringRef fn = parent->getName();
 
-      if (fn.str() == "main") // returning from main
-      {
-        insertDpFinalize(&*BI);
-      } else {
-        IRBuilder<> IRBRet(&*BI);
-        IRBRet.CreateCall(DpFuncExit, {ConstantInt::get(Int32, lid), ConstantInt::get(Int32, 0)});
-      }
+      // main is not special here any more: the runtime is shut down from .fini_array, after the
+      // destructors of the target's global objects have run, so main reports its exit like every
+      // other function.
+      IRBuilder<> IRBRet(&*BI);
+      IRBRet.CreateCall(DpFuncExit, {ConstantInt::get(Int32, lid), ConstantInt::get(Int32, 0)});
 
       if (DP_DEBUG) {
         errs() << fn << " returning on " << lid << "\n";

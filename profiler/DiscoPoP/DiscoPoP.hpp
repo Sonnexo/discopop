@@ -159,7 +159,6 @@ private:
   void CFA(Function &F, LoopInfo &LI);
 
   // Callback Inserters
-  // void insertDpInit(const vector<Value*> &args, Instruction *before);
   // void insertDpFinalize(Instruction *before);
   void instrumentAlloca(AllocaInst *toInstrument);
 
@@ -185,7 +184,7 @@ private:
   int64_t uniqueNum;
 
   // Callbacks to run-time library
-  FunctionCallee DpInit, DpFinalize;
+  FunctionCallee DpFinalize;
   FunctionCallee DpRead, DpWrite;
   FunctionCallee DpAlloca, DpNew, DpDelete; //, DpDecl;
   FunctionCallee DpCallOrInvoke;

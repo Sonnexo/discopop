@@ -23,16 +23,21 @@ class TestLoopOverArray(InstrumentationTestCase):
         }
         """
 
-    def test_main_is_entered_and_finalized(self) -> None:
+    def test_main_is_entered_and_exited_like_any_other_function(self) -> None:
         self.assertCallbackCount("__dp_func_entry", 1)
         self.assertInstrumentsLine("__dp_func_entry", "main")
         # the second argument marks the entry point of the program
         self.assertEqual(1, self.program.calls("__dp_func_entry")[0].arg_int(1))
 
-        # main terminates the profiling run instead of reporting a plain function exit
-        self.assertCallbackCount("__dp_finalize", 1)
-        self.assertCallbackCount("__dp_func_exit", 0)
-        self.assertInstrumentsLine("__dp_finalize", "array_read")
+        self.assertCallbackCount("__dp_func_exit", 1)
+        self.assertInstrumentsLine("__dp_func_exit", "array_read")
+
+    def test_the_runtime_is_not_shut_down_from_the_program(self) -> None:
+        # The runtime writes its results from a .fini_array entry, after the destructors of the
+        # target's global objects have run -- those are instrumented too and their accesses would
+        # otherwise be lost. Nothing in the instrumented code calls __dp_finalize any more; only a
+        # function that never returns still gets an explicit call, see runOnBasicBlock.cpp.
+        self.assertCallbackCount("__dp_finalize", 0)
 
     def test_function_entry_precedes_everything_else(self) -> None:
         first = self.program.functions["main"][0]
@@ -126,10 +131,10 @@ class TestFunctionCall(InstrumentationTestCase):
         self.assertEqual(1, starts["main"])
         self.assertEqual(0, starts[self.helper_name()])
 
-    def test_the_helper_reports_its_exit_and_main_finalizes(self) -> None:
+    def test_every_function_reports_its_exit(self) -> None:
         self.assertCallbackCount("__dp_func_exit", 1, function=self.helper_name())
-        self.assertCallbackCount("__dp_func_exit", 0, function="main")
-        self.assertCallbackCount("__dp_finalize", 1, function="main")
+        self.assertCallbackCount("__dp_func_exit", 1, function="main")
+        self.assertCallbackCount("__dp_finalize", 0)
 
     def test_the_call_site_is_instrumented_as_project_code(self) -> None:
         self.assertInstrumentsLine("__dp_call", "call")

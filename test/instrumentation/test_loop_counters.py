@@ -82,15 +82,15 @@ class TestLoopCounters(InstrumentationTestCase):
         self.assertCallbackCount("__dp_loop_output", 1)
         self.assertEqual("main", self.program.calls("__dp_loop_output")[0].function)
 
-    def test_the_counters_are_dumped_before_the_runtime_is_finalized(self) -> None:
-        # __dp_finalize tears the runtime down, the loop manager included, so a dump afterwards
-        # would read freed state
+    def test_the_counters_are_dumped_at_the_end_of_main(self) -> None:
+        # The runtime is torn down from a .fini_array entry, so there is no __dp_finalize left in
+        # the IR to place the dump in front of. It goes immediately before main's return instead,
+        # which is still well before the loop manager is destroyed.
         dump = self.program.calls("__dp_loop_output")[0]
         following = self.program.next_instruction(dump)
         self.assertIsNotNone(following, "__dp_loop_output is the last instruction of main")
         assert following is not None
-        self.assertEqual(
-            "__dp_finalize",
-            getattr(following, "callee", None),
-            f"__dp_loop_output is followed by '{following.text}' instead of __dp_finalize",
+        self.assertTrue(
+            following.text.startswith("ret"),
+            f"__dp_loop_output is followed by '{following.text}' instead of main's return",
         )
