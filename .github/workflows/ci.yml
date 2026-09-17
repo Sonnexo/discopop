@@ -135,10 +135,54 @@ jobs:
 
 
 
+  pass_overhead_benchmark:
+    runs-on: self-hosted
+    container:
+      image: ubuntu:24.04
+    name: "Benchmark: overhead of the DiscoPoP LLVM pass"
+    steps:
+      - name: Install Prerequisites
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt update
+          apt install -y python3 python3-pip python3-venv build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev
+
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      # only the profiler is needed: the benchmark drives clang directly, it does not run the
+      # explorer. Note the missing -e, without which LLVMDiscoPoP.so does not end up in the venv.
+      - name: Setup venv and install the DiscoPoP profiler
+        run: |
+          rm -rf venv
+          python3 -m venv venv
+          venv/bin/pip install ./profiler
+          venv/bin/pip install black mypy
+
+      - name: Check formatting and types of the benchmark driver
+        run: |
+          venv/bin/python3 -m black -l 120 --check benchmark/pass_overhead
+          venv/bin/python3 -m mypy --config-file=mypy.ini benchmark/pass_overhead/run_pass_benchmark.py
+
+      # fails if a program does not build or run, or if the instrumented binary stops reproducing
+      # the output of the uninstrumented one. The timings themselves are reported, not enforced.
+      - name: Compare builds with and without the DiscoPoP pass
+        run: |
+          venv/bin/python3 benchmark/pass_overhead/run_pass_benchmark.py \
+            --json-out pass_overhead_results.json \
+            --markdown-out pass_overhead_summary.md
+
+      - name: Add the comparison to the job summary
+        if: ${{ always() }}
+        run: |
+          if [ -f pass_overhead_summary.md ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            cat pass_overhead_summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   checks_successful:
     runs-on: self-hosted
     name: Checks successful
-    needs: [build_install_and_test]
+    needs: [build_install_and_test, pass_overhead_benchmark]
     if: ${{ always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     steps:
       - name: Report
