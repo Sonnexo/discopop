@@ -6,8 +6,6 @@ they report. Source lines are referred to by the ``// @<marker>`` comments in th
 than by number, so the programs stay editable.
 """
 
-import unittest
-
 from .utilities import InstrumentationTestCase
 
 
@@ -177,7 +175,12 @@ class TestNestedLoops(InstrumentationTestCase):
 
 
 class TestHeapAllocation(InstrumentationTestCase):
-    """Allocations have to be registered and unregistered, or addresses are reused silently."""
+    """Allocations have to be registered and unregistered, or addresses are reused silently.
+
+    The three deallocations below reach clang as three different mangled names -- ``free``,
+    ``_ZdaPv`` for ``delete[]`` and, since C++14, the sized ``_ZdlPvm`` for a plain ``delete`` --
+    and the pass has to recognise all of them.
+    """
 
     SOURCE = """
         #include <stdlib.h>
@@ -188,18 +191,35 @@ class TestHeapAllocation(InstrumentationTestCase):
           int first = m[0];
           free(m);                                  // @free
 
-          int *n = new int[4];                      // @new
-          n[0] = 2;
-          int second = n[0];
-          delete[] n;                               // @delete
+          int *a = new int[4];                      // @new_array
+          a[0] = 2;
+          int second = a[0];
+          delete[] a;                               // @delete_array
 
-          return first + second;
+          int *s = new int;                         // @new_scalar
+          *s = 3;
+          int third = *s;
+          delete s;                                 // @delete_scalar
+
+          return first + second + third;
         }
         """
 
     def test_malloc_and_free_are_both_instrumented(self) -> None:
         self.assertInstrumentsLine("__dp_new", "malloc")
         self.assertInstrumentsLine("__dp_delete", "free")
+
+    def test_new_and_delete_are_both_instrumented(self) -> None:
+        self.assertInstrumentsLine("__dp_new", "new_array")
+        self.assertInstrumentsLine("__dp_delete", "delete_array")
+        self.assertInstrumentsLine("__dp_new", "new_scalar")
+        self.assertInstrumentsLine("__dp_delete", "delete_scalar")
+
+    def test_every_allocation_is_released_again(self) -> None:
+        # a deallocation the pass does not recognise leaves the address range registered, so a
+        # later allocation reusing the address inherits the accesses of the old object
+        self.assertCallbackCount("__dp_new", 3)
+        self.assertCallbackCount("__dp_delete", 3)
 
     def test_the_allocated_size_is_reported(self) -> None:
         allocation = [call for call in self.program.calls("__dp_new") if self.program.source_line(call) is not None]
@@ -208,17 +228,3 @@ class TestHeapAllocation(InstrumentationTestCase):
 
     def test_heap_accesses_are_instrumented(self) -> None:
         self.assertInstrumentsLine("__dp_write", "malloc_write")
-
-    def test_new_is_instrumented(self) -> None:
-        self.assertInstrumentsLine("__dp_new", "new")
-
-    @unittest.expectedFailure
-    def test_delete_is_instrumented(self) -> None:
-        """Known gap: C++ deallocation is not registered, unlike ``free``.
-
-        ``runOnBasicBlock`` matches the deallocation functions by name and only knows ``_ZdlPv``
-        and ``free``. Clang emits ``_ZdaPv`` for ``delete[]`` and, since C++14, the sized form
-        ``_ZdlPvm`` for a plain ``delete``, so neither reaches ``instrumentDeleteOrFree`` and the
-        freed address range stays registered with the runtime.
-        """
-        self.assertInstrumentsLine("__dp_delete", "delete")

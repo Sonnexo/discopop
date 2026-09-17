@@ -55,6 +55,8 @@ void __dp_func_entry(LID lid, int32_t isStart) {
 
   if (!dpInited) {
     // This part should be executed only once.
+    // The globals the runtime manages itself have to exist before anything reads them.
+    construct_immortal_globals();
     readRuntimeInfo();
     timers = new Timers();
     statistics_profiling_start_time = std::chrono::high_resolution_clock::now();

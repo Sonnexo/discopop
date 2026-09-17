@@ -209,6 +209,51 @@ class InstrumentedProgram:
             return None
         return self.strings.get(name)
 
+    def next_instruction(self, instruction: Instruction) -> Optional[Instruction]:
+        """The instruction following ``instruction`` in its function, if there is one."""
+        siblings = self.functions[instruction.function]
+        position = instruction.index + 1
+        return siblings[position] if position < len(siblings) else None
+
+    def global_constructors(self) -> List[str]:
+        """The functions registered in ``@llvm.global_ctors``, i.e. run before ``main``."""
+        for line in self.ir.splitlines():
+            if line.startswith("@llvm.global_ctors"):
+                return re.findall(r"ptr @([\w.$\-]+)", line)
+        return []
+
+    def basic_block_dependencies(self) -> Dict[int, str]:
+        """The table the pass hands to the runtime through ``__dp_add_bb_deps``.
+
+        ``doFinalization`` collects the dependencies of the accesses whose instrumentation was
+        omitted into one string, ``<id>=<deps>/<id>=<deps>/...``, where the ids are the ones
+        reported by ``__dp_report_bb`` and ``__dp_report_bb_pair``. Since the individual
+        ``__dp_read`` / ``__dp_write`` calls are gone, this string is the only remaining record of
+        those dependencies.
+        """
+        table: Dict[int, str] = {}
+        encoded = self.strings.get("@.dp_bb_deps")
+        if encoded is None:
+            return table
+        for entry in encoded.split("/"):
+            identifier, _, dependencies = entry.partition("=")
+            if identifier.isdigit():
+                table[int(identifier)] = dependencies
+        return table
+
+    def loop_metadata(self) -> List[Tuple[int, int, int]]:
+        """``(file id, loop id, line)`` for every loop, from ``.discopop/profiler/loop_meta.txt``."""
+        path = os.path.join(self.directory, ".discopop", "profiler", "loop_meta.txt")
+        entries: List[Tuple[int, int, int]] = []
+        if not os.path.exists(path):
+            return entries
+        with open(path) as metadata_file:
+            for line in metadata_file:
+                parts = line.split()
+                if len(parts) == 3:
+                    entries.append((int(parts[0]), int(parts[1]), int(parts[2])))
+        return entries
+
     # -- locations -----------------------------------------------------------------------------
 
     def source_line(self, call: Call) -> Optional[int]:

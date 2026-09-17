@@ -14,6 +14,16 @@ instrumented program, so a mistake made here surfaces much later and only indire
 The tests in `test/profiler` cover the other end: they run the instrumented program and compare the
 dependencies it reports against a gold standard.
 
+## Layout
+
+- `test_instrumentation.py` — what the pass inserts and where: function entry and exit, memory
+  accesses, allocations, loops, call sites.
+- `test_omission.py` — the basic block machinery that stands in for the instrumentation the pass
+  leaves out (`__dp_report_bb`, `__dp_report_bb_pair`, `__dp_add_bb_deps`).
+- `test_loop_counters.py` — the iteration counters (`__dp_loop_incr`, `__dp_loop_output`) and their
+  agreement with `loop_meta.txt`.
+- `utilities.py` — compiling and parsing, plus the shared assertions.
+
 ## Running them
 
 ```bash

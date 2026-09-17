@@ -48,6 +48,18 @@ A real case would be:
   i32 0              ;; Runtime Language
 }
 */
+// Recognizes every form of deallocation that a delete expression or a call to free can produce.
+//
+// The Itanium ABI mangles the global "operator delete" as _Zdl and "operator delete[]" as _Zda,
+// followed by the encoded parameters, of which the first is always the pointer (Pv). Which overload
+// clang picks depends on the language standard and on the type: a plain "delete p" became the sized
+// _ZdlPvm in C++14, "delete[] p" is _ZdaPv, and over-aligned types add St11align_val_t. Matching the
+// prefix therefore covers the whole family, including variants a future clang may add, instead of
+// only the single spelling _ZdlPv.
+static bool isDeallocationFunction(StringRef fn) {
+  return fn == "free" || fn.starts_with("_ZdlPv") || fn.starts_with("_ZdaPv");
+}
+
 // TODO: atomic variables
 void DiscoPoP::runOnBasicBlock(BasicBlock &BB) {
   for (BasicBlock::iterator BI = BB.begin(), E = BB.end(); BI != E; ++BI) {
@@ -229,7 +241,7 @@ void DiscoPoP::runOnBasicBlock(BasicBlock &BB) {
           }
           continue;
         }
-        if ((fn.str() == "_ZdlPv") || (fn.str() == "free")) {
+        if (isDeallocationFunction(fn)) {
           instrumentDeleteOrFree(cast<CallBase>(BI));
           continue;
         }
