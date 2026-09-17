@@ -143,7 +143,8 @@ def _geometric_mean(values: Sequence[float]) -> float:
 def discover_programs(programs_dir: Path, name_filter: Optional[str]) -> List[Program]:
     """Collect the benchmark programs from ``programs_dir``, sorted by name."""
     programs: List[Program] = []
-    for source in sorted(programs_dir.glob("*.cpp")):
+    # absolute, because every program is compiled from its own working directory
+    for source in sorted(programs_dir.resolve().glob("*.cpp")):
         name = source.stem
         if name_filter is not None and name_filter not in name:
             continue
@@ -172,7 +173,8 @@ def find_plugin(explicit: Optional[Path]) -> Path:
     if explicit is not None:
         if not explicit.is_file():
             raise BenchmarkError(f"The specified pass plugin does not exist: {explicit}")
-        return explicit
+        # absolute, because the compiler is invoked from a different working directory
+        return explicit.resolve()
     for directory in _candidate_library_dirs():
         for filename in ("LLVMDiscoPoP.so", "LLVMDiscoPoP.dylib"):
             plugin = directory / filename
@@ -189,7 +191,7 @@ def find_rtlib_dir(explicit: Optional[Path], plugin: Path) -> Path:
     candidates = [explicit] if explicit is not None else [plugin.parent, *_candidate_library_dirs()]
     for directory in candidates:
         if directory is not None and (directory / "libDiscoPoP_RT.a").is_file():
-            return directory
+            return directory.resolve()
     raise BenchmarkError(
         "Could not locate libDiscoPoP_RT.a. Install the profiler into the active environment "
         "(`pip install ./profiler`, without -e) or pass --rtlib-dir explicitly."
