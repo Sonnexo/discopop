@@ -236,6 +236,7 @@ void DiscoPoP::runOnBasicBlock(BasicBlock &BB) {
           } else if (isa<InvokeInst>(BI)) {
             instrumentCalloc(cast<InvokeInst>(BI));
           }
+          continue;
         }
 
         if (fn.str() == "posix_memalign") {

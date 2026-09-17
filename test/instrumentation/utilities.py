@@ -209,6 +209,69 @@ class InstrumentedProgram:
             return None
         return self.strings.get(name)
 
+    def result_register(self, instruction: Instruction) -> Optional[str]:
+        """The register ``instruction`` assigns to, e.g. ``%call2``, if it assigns to one."""
+        match = re.match(r"(%[\w.$\-]+) = ", instruction.text)
+        return match.group(1) if match else None
+
+    def operand_registers(self, instruction: Instruction) -> List[str]:
+        """The registers ``instruction`` reads, i.e. every ``%name`` in it but its own result."""
+        result = self.result_register(instruction)
+        # everything from the first metadata marker on is !dbg and friends, not operands
+        names = re.findall(r"%[\w.$\-]+", instruction.text.split("!", 1)[0])
+        return [name for name in names if name != result]
+
+    def definition_of(self, register: str, *, before: Instruction) -> Optional[Instruction]:
+        """The instruction assigning ``register``, looked up in the function of ``before``."""
+        for instruction in self.functions[before.function]:
+            if instruction.index >= before.index:
+                break
+            if self.result_register(instruction) == register:
+                return instruction
+        return None
+
+    def address_origin(self, call: Call, index: int = 1) -> Optional[Instruction]:
+        """What produced the address ``call`` reports as its ``index``-th argument.
+
+        The pass passes addresses as integers, so the argument is a ``ptrtoint`` of the pointer it
+        actually means. This follows that chain back to the instruction the pointer came from --
+        the allocation call, a ``load``, an ``alloca`` -- which is what a test wants to talk about.
+        """
+        if index >= len(call.args):
+            return None
+        instruction = self.definition_of(call.args[index].split()[-1], before=call)
+        for _ in range(8):
+            if instruction is None:
+                return None
+            body = instruction.text.split(" = ", 1)[-1].strip()
+            if not body.startswith(("ptrtoint", "bitcast", "addrspacecast", "getelementptr")):
+                return instruction
+            operands = self.operand_registers(instruction)
+            if not operands:
+                return instruction
+            instruction = self.definition_of(operands[0], before=instruction)
+        return instruction
+
+    def invoke_normal_destination(self, call: Call) -> Optional[str]:
+        """The block an ``invoke`` continues in when its callee returns normally.
+
+        ``None`` for an ordinary call. An ``invoke`` terminates its basic block, so instrumentation
+        that has to run after the call cannot be appended to it; it belongs at the start of this
+        block instead.
+
+        LLVM prints the destinations of an ``invoke`` on a continuation line, which this parser
+        sees as an instruction of its own, so the successor is searched as well.
+        """
+        pattern = re.compile(r"\bto label %([\w.$\-]+)\s+unwind label\b")
+        candidates = [call, self.next_instruction(call)]
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            match = pattern.search(candidate.text)
+            if match:
+                return match.group(1)
+        return None
+
     def next_instruction(self, instruction: Instruction) -> Optional[Instruction]:
         """The instruction following ``instruction`` in its function, if there is one."""
         siblings = self.functions[instruction.function]

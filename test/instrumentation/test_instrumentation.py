@@ -6,7 +6,7 @@ they report. Source lines are referred to by the ``// @<marker>`` comments in th
 than by number, so the programs stay editable.
 """
 
-from .utilities import InstrumentationTestCase
+from .utilities import Call, InstrumentationTestCase
 
 
 class TestLoopOverArray(InstrumentationTestCase):
@@ -31,6 +31,12 @@ class TestLoopOverArray(InstrumentationTestCase):
 
         self.assertCallbackCount("__dp_func_exit", 1)
         self.assertInstrumentsLine("__dp_func_exit", "array_read")
+
+    def test_the_runtime_is_not_started_from_the_program(self) -> None:
+        # The runtime brings itself up from a .init_array entry of priority 101, before the
+        # constructors of the target's global objects, so that their accesses are profiled too.
+        # The pass inserting __dp_init anywhere would start it a second time.
+        self.assertCallbackCount("__dp_init", 0)
 
     def test_the_runtime_is_not_shut_down_from_the_program(self) -> None:
         # The runtime writes its results from a .fini_array entry, after the destructors of the
@@ -233,3 +239,224 @@ class TestHeapAllocation(InstrumentationTestCase):
 
     def test_heap_accesses_are_instrumented(self) -> None:
         self.assertInstrumentsLine("__dp_write", "malloc_write")
+
+
+class TestReallocation(InstrumentationTestCase):
+    """The allocators besides ``malloc`` and ``new``, each with its own instrumentation routine.
+
+    ``calloc`` computes the allocated size from two arguments, ``realloc`` both releases a block
+    and registers one, and ``posix_memalign`` hands the block back through an out parameter. Each
+    of them therefore reports its size from a different argument than ``malloc`` does, and a block
+    registered with the wrong length makes the runtime attribute accesses to the wrong object.
+    """
+
+    SOURCE = """
+        #include <stdlib.h>
+
+        int main() {
+          int *c = (int *)calloc(4, sizeof(int));        // @calloc
+          c[0] = 1;                                      // @calloc_write
+          int first = c[0];
+
+          int *r = (int *)realloc(c, 8 * sizeof(int));   // @realloc
+          r[1] = 2;                                      // @realloc_write
+          int second = r[1];
+          free(r);                                       // @free
+
+          void *aligned = 0;
+          posix_memalign(&aligned, 64, 256);             // @memalign
+          int *p = (int *)aligned;
+          p[0] = 3;                                      // @aligned_write
+          int third = p[0];
+          free(aligned);                                 // @free_aligned
+
+          return first + second + third;
+        }
+        """
+
+    def allocation_at(self, line: int) -> Call:
+        calls = [call for call in self.program.calls("__dp_new") if self.program.source_line(call) == line]
+        self.assertEqual(1, len(calls), f"expected exactly one registration for line {line}")
+        return calls[0]
+
+    def release_at(self, line: int) -> Call:
+        calls = [call for call in self.program.calls("__dp_delete") if self.program.source_line(call) == line]
+        self.assertEqual(1, len(calls), f"expected exactly one release for line {line}")
+        return calls[0]
+
+    def test_every_allocator_is_instrumented(self) -> None:
+        self.assertCallbackCount("__dp_new", 3)
+        self.assertInstrumentsLine("__dp_new", "calloc")
+        self.assertInstrumentsLine("__dp_new", "realloc")
+        self.assertInstrumentsLine("__dp_new", "memalign")
+
+    def test_the_allocated_sizes_are_reported(self) -> None:
+        # calloc multiplies its two arguments, realloc takes its second one and posix_memalign its
+        # third; the sizes below are 4 * sizeof(int), 8 * sizeof(int) and the explicit 256
+        sizes = sorted(call.required_arg_int(3) for call in self.program.calls("__dp_new"))
+        self.assertEqual([16, 32, 256], sizes)
+
+    def test_realloc_releases_the_old_block_before_registering_the_new_one(self) -> None:
+        line = self.program.line_of_marker("realloc")
+        self.assertLess(
+            self.release_at(line).index,
+            self.allocation_at(line).index,
+            "realloc registers the new block before releasing the old one, which undoes the registration",
+        )
+
+    def test_realloc_registers_the_block_it_returned(self) -> None:
+        # realloc is free to move the allocation, so only the returned pointer describes the new
+        # block; registering the argument again would leave the runtime tracking a range the
+        # program has stopped using, and the freshly allocated one unwatched.
+        line = self.program.line_of_marker("realloc")
+        registered = self.program.address_origin(self.allocation_at(line))
+        released = self.program.address_origin(self.release_at(line))
+        self.assertIsNotNone(registered)
+        self.assertIsNotNone(released)
+        assert registered is not None and released is not None
+        self.assertIn("@realloc", registered.text, f"realloc registers '{registered.text}', not its result")
+        self.assertNotIn("@realloc", released.text, f"realloc releases '{released.text}', not the old block")
+
+    def test_posix_memalign_registers_the_block_and_not_the_out_parameter(self) -> None:
+        # posix_memalign returns the block through a void** out parameter, so its first argument is
+        # the address of the caller's pointer variable. Registering that address would put the
+        # accesses of the block onto a stack slot of a few bytes.
+        origin = self.program.address_origin(self.allocation_at(self.program.line_of_marker("memalign")))
+        self.assertIsNotNone(origin)
+        assert origin is not None
+        self.assertNotIn("alloca", origin.text, f"posix_memalign registers the out parameter itself: '{origin.text}'")
+        self.assertIn("load", origin.text, f"posix_memalign registers '{origin.text}' instead of the loaded block")
+        # that load is instrumentation, not a source level access -- the program writes the out
+        # parameter on this line, it does not read it
+        self.assertDoesNotInstrumentLine("__dp_read", "memalign")
+
+    def test_the_allocators_are_not_reported_as_ordinary_calls(self) -> None:
+        # Every allocation and release in this program has its own instrumentation, so none of them
+        # is additionally reported through __dp_call -- which is what the allocators that fall
+        # through to the generic call handling would end up doing.
+        self.assertCallbackCount("__dp_call", 0)
+
+    def test_every_block_is_released_again(self) -> None:
+        # one release per free, plus the implicit one realloc performs
+        self.assertCallbackCount("__dp_delete", 3)
+        self.assertInstrumentsLine("__dp_delete", "free")
+        self.assertInstrumentsLine("__dp_delete", "free_aligned")
+
+    def test_accesses_to_the_allocated_blocks_are_instrumented(self) -> None:
+        self.assertInstrumentsLine("__dp_write", "calloc_write")
+        self.assertInstrumentsLine("__dp_write", "realloc_write")
+        self.assertInstrumentsLine("__dp_write", "aligned_write")
+
+
+class TestExceptionalControlFlow(InstrumentationTestCase):
+    """An allocation that may throw is an ``invoke``, which terminates its basic block.
+
+    Instrumentation that has to run after such a call cannot be appended to it. The pass puts it
+    at the start of the block the call returns to instead, and every allocation routine carries a
+    separate code path for that -- one that the other test programs never reach, because outside a
+    try block clang emits a plain call.
+    """
+
+    SOURCE = """
+        int main() {
+          int result = 0;
+          try {
+            int *a = new int[4];        // @new_in_try
+            a[0] = 1;                   // @write_in_try
+            result = a[0];
+            delete[] a;                 // @delete_in_try
+            if (result != 1) {
+              throw result;             // @throw
+            }
+          } catch (int) {               // @catch
+            return 1;
+          }
+          return result;                // @return
+        }
+        """
+
+    def allocation(self) -> Call:
+        """The call to ``operator new[]``, whatever form clang gave it."""
+        allocations = self.program.calls("_Znam")
+        self.assertEqual(1, len(allocations), "expected exactly one call to operator new[]")
+        return allocations[0]
+
+    def test_the_allocation_is_an_invoke(self) -> None:
+        # If clang ever stops emitting an invoke here, the remaining tests of this class quietly
+        # fall back to the ordinary call path, which the other classes already cover -- so the
+        # premise of the class is checked explicitly.
+        self.assertIsNotNone(
+            self.program.invoke_normal_destination(self.allocation()),
+            f"'new int[4]' inside a try block did not become an invoke: {self.allocation().text}",
+        )
+
+    def test_the_allocation_is_registered_where_the_invoke_returns_to(self) -> None:
+        allocation = self.allocation()
+        self.assertCallbackCount("__dp_new", 1)
+        registration = self.program.calls("__dp_new")[0]
+        self.assertNotEqual(
+            allocation.block,
+            registration.block,
+            "__dp_new was placed in the block of the invoke, which ends with that invoke",
+        )
+        self.assertEqual(self.program.invoke_normal_destination(allocation), registration.block)
+        self.assertInstrumentsLine("__dp_new", "new_in_try")
+
+    def test_the_matching_delete_is_instrumented(self) -> None:
+        self.assertCallbackCount("__dp_delete", 1)
+        self.assertInstrumentsLine("__dp_delete", "delete_in_try")
+
+    def test_accesses_inside_the_try_block_are_instrumented(self) -> None:
+        self.assertInstrumentsLine("__dp_write", "write_in_try")
+
+    def test_the_function_is_entered_and_left_exactly_once(self) -> None:
+        # both returns share one exit block at -O0, so the unwinding paths must not add exits of
+        # their own
+        self.assertCallbackCount("__dp_func_entry", 1)
+        self.assertCallbackCount("__dp_func_exit", 1)
+        self.assertCallbackCount("__dp_finalize", 0)
+
+
+class TestAbnormalTermination(InstrumentationTestCase):
+    """A call that never returns bypasses the ordinary shutdown, so the pass has to force one.
+
+    The runtime is otherwise brought down from a ``.fini_array`` entry, after the destructors of
+    the program's global objects. ``abort()`` and ``_exit()`` never run those, so everything
+    profiled up to that point would be lost without an explicit ``__dp_finalize`` in front of the
+    call. ``exit()`` and ``quick_exit()`` do run them and are deliberately left alone, see
+    runOnBasicBlock.cpp.
+    """
+
+    SOURCE = """
+        #include <stdlib.h>
+
+        int main() {
+          int values[2];
+          values[0] = 1;              // @write
+          if (values[0] != 1) {
+            abort();                  // @abort
+          }
+          return values[0];           // @return
+        }
+        """
+
+    def abort_call(self) -> Call:
+        calls = self.program.calls("abort")
+        self.assertEqual(1, len(calls), "expected exactly one call to abort")
+        return calls[0]
+
+    def test_the_runtime_is_shut_down_before_the_program_is_aborted(self) -> None:
+        self.assertCallbackCount("__dp_finalize", 1)
+        self.assertInstrumentsLine("__dp_finalize", "abort")
+
+    def test_the_shutdown_precedes_the_call_that_never_returns(self) -> None:
+        shutdown = self.program.calls("__dp_finalize")[0]
+        abort = self.abort_call()
+        self.assertEqual(abort.block, shutdown.block, "the shutdown sits on a different path than abort")
+        self.assertLess(shutdown.index, abort.index, "the runtime is shut down only after abort was called")
+
+    def test_the_ordinary_return_keeps_its_function_exit(self) -> None:
+        # the abnormal path must neither cost the normal one its exit nor gain it a second shutdown
+        self.assertCallbackCount("__dp_func_exit", 1)
+        self.assertInstrumentsLine("__dp_func_exit", "return")
+        self.assertNotEqual(self.abort_call().block, self.program.calls("__dp_func_exit")[0].block)
