@@ -13,9 +13,11 @@ on:
     branches:
       - master
       - new_explorer  # This is a temporary addition and should be removed before merging into master!
+      - feature/pass-benchmark  # This is a temporary addition and should be removed before merging into master!
   pull_request:
     branches:
       - "**"
+  workflow_dispatch:
 
 permissions:
   contents: read
